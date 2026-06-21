@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import FileDrop from "@/components/FileDrop";
 import SummaryCards from "@/components/SummaryCards";
 import ResultsTable from "@/components/ResultsTable";
+import SiteFooter from "@/components/SiteFooter";
 import { reconcile, loadSample } from "@/lib/api";
 import type { ReconResult, ReconRow, TabKey, UnmatchedRow } from "@/lib/types";
 import { inr } from "@/lib/format";
@@ -286,10 +287,7 @@ export default function Home() {
         </section>
       )}
 
-      <footer className="foot">
-        <span>GST Purchase Matcher · runs locally, your files never leave your machine.</span>
-        <span>FastAPI + Next.js · for GSTR-2A / 2B reconciliation</span>
-      </footer>
+      <SiteFooter />
     </main>
   );
 }
