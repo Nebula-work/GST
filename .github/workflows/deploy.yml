@@ -54,4 +54,5 @@ jobs:
             "cd /home/ubuntu/GST && git pull --ff-only && \
              backend/.venv/bin/pip install -q -r backend/requirements.txt && \
              sudo systemctl restart gst-backend && \
-             curl -fsS http://127.0.0.1:8011/api/health && echo ' backend healthy'"
+             curl -fsS --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:8011/api/health && \
+             echo ' backend healthy'"
