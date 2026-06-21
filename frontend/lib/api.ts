@@ -1,7 +1,16 @@
 import type { ReconResult } from "./types";
 
+// Where the FastAPI backend lives, resolved at build time:
+//   - NEXT_PUBLIC_API_BASE set   -> use it ("" = same-origin / relative /api)
+//   - unset, production build    -> "" (same origin: nginx proxies /api -> backend)
+//   - unset, development         -> http://localhost:8011 (separate dev port)
+const RAW_API_BASE = process.env.NEXT_PUBLIC_API_BASE;
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE?.replace(/\/$/, "") || "http://localhost:8011";
+  RAW_API_BASE !== undefined
+    ? RAW_API_BASE.replace(/\/$/, "")
+    : process.env.NODE_ENV === "production"
+      ? ""
+      : "http://localhost:8011";
 
 export async function reconcile(
   portalFile: File,
@@ -18,7 +27,7 @@ export async function reconcile(
     res = await fetch(`${API_BASE}/api/reconcile`, { method: "POST", body: form });
   } catch {
     throw new Error(
-      `Could not reach the backend at ${API_BASE}. Make sure the Python server is running.`,
+      `Could not reach the backend at ${API_BASE || "/api"}. Make sure the server is running.`,
     );
   }
 

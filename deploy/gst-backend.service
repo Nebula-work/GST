@@ -1,0 +1,25 @@
+# systemd unit for the GST Purchase Matcher FastAPI backend.
+# Install:
+#   sudo cp deploy/gst-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now gst-backend
+# Adjust the paths below if you cloned somewhere other than /home/ubuntu/gst.
+
+[Unit]
+Description=GST Purchase Matcher API (FastAPI/uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/gst/backend
+ExecStart=/home/ubuntu/gst/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8011
+Restart=always
+RestartSec=3
+
+# Bound to localhost and proxied by nginx (same origin) -> no CORS needed.
+# If you ever expose it directly, restrict origins instead:
+# Environment=CORS_ALLOW_ORIGINS=https://gst.sysmos.org
+
+[Install]
+WantedBy=multi-user.target

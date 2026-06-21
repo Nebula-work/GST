@@ -21,7 +21,8 @@ applications:
           commands:
             - npm run build
       artifacts:
-        baseDirectory: .next
+        # Next.js `output: "export"` emits a static site to `out/`.
+        baseDirectory: out
         files:
           - '**/*'
       cache:
