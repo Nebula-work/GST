@@ -1,0 +1,57 @@
+name: Deploy to EC2
+
+# Every push/merge to main builds the frontend in the cloud, ships the static
+# files to the EC2, and updates + restarts the backend.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}        # also allow manual runs from the Actions tab
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false    # don't interrupt an in-flight deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- Build the static frontend on GitHub's runner (keeps the EC2 idle) ----
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend (static export)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build          # -> frontend/out  (API calls are relative /api)
+
+      # ---- SSH key from the repo secret ----
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      # ---- Ship the static frontend (mirror into the web root) ----
+      - name: Deploy frontend
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
+            frontend/out/ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/gst/"
+
+      # ---- Update + restart the backend, then health-check ----
+      - name: Deploy backend
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "cd /home/ubuntu/GST && git pull --ff-only && \
+             backend/.venv/bin/pip install -q -r backend/requirements.txt && \
+             sudo systemctl restart gst-backend && \
+             curl -fsS http://127.0.0.1:8011/api/health && echo ' backend healthy'"

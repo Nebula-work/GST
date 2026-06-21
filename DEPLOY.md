@@ -81,6 +81,25 @@ cd ../frontend && npm ci && npm run build \
   && sudo rm -rf /var/www/gst/* && sudo cp -r out/* /var/www/gst/
 ```
 
+## CI/CD (auto-deploy on merge to main)
+
+`.github/workflows/deploy.yml` builds the frontend on GitHub's runner, rsyncs
+the static `out/` to `/var/www/gst`, then `git pull` + restarts the backend on
+the EC2. It runs on every push to `main` (and can be triggered manually).
+
+**Required GitHub repo secrets** (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+| --- | --- |
+| `EC2_SSH_KEY` | private key of a deploy keypair (no passphrase) |
+| `EC2_HOST` | the EC2 IP (or domain) |
+| `EC2_USER` | `ubuntu` |
+
+**One-time EC2 prep:**
+- Add the deploy key's **public** half to `~/.ssh/authorized_keys`.
+- Let the web root be writable by the deploy user: `sudo chown -R ubuntu:ubuntu /var/www/gst`.
+- Passwordless `sudo systemctl restart gst-backend` (already the case on this box).
+
 ## Troubleshooting
 - **502 Bad Gateway on /api** → backend isn't running: `sudo systemctl status gst-backend`, `journalctl -u gst-backend -n 50`.
 - **413 Request Entity Too Large** → raise `client_max_body_size` in the nginx site.
