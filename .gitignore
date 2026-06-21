@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Next.js build output
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Local environment overrides
+.env*.local
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
