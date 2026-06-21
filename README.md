@@ -52,6 +52,18 @@ The API is now at <http://localhost:8011> (health check: `/api/health`).
 > different port, change `--port` above **and** `NEXT_PUBLIC_API_BASE` in
 > `frontend/.env.local`.
 
+**CORS (production):** the backend allows any origin by default (handy locally).
+In production, restrict it to your frontend via the `CORS_ALLOW_ORIGINS` env var
+(comma-separated, no trailing slash), e.g.:
+
+```bash
+CORS_ALLOW_ORIGINS="https://main.d1234abcd.amplifyapp.com,https://gst.example.com" \
+  uvicorn app.main:app --host 0.0.0.0 --port 8011
+```
+
+For wildcard hosts (e.g. Amplify branch URLs) use `CORS_ALLOW_ORIGIN_REGEX`,
+such as `https://.*\.amplifyapp\.com`. See `backend/.env.example`.
+
 ### 2. Frontend (port 3000)
 
 In a second terminal:
@@ -119,6 +131,27 @@ gst/
 │   └── lib/               # api client, types, formatting
 └── start.sh               # boots both servers
 ```
+
+## Deploying
+
+The frontend and backend are **two separate services** — deploy them apart.
+
+### Frontend → AWS Amplify Hosting
+This repo ships an [`amplify.yml`](./amplify.yml) (monorepo build spec, app root
+`frontend/`) and a `frontend/.nvmrc` (Node 20). In the Amplify console:
+
+1. Connect this GitHub repo; Amplify reads `amplify.yml` automatically.
+2. Under **Hosting → Environment variables**, set
+   `NEXT_PUBLIC_API_BASE = https://<your-backend-url>` (baked in at build time).
+3. Deploy. Amplify builds the Next.js app and serves it over HTTPS.
+
+### Backend → anywhere that runs Python (not Amplify)
+Amplify Hosting cannot run FastAPI. Host `backend/` on **AWS App Runner**, EC2,
+Render, Fly.io, etc. — it must be reachable over **HTTPS**. Then:
+
+- Point the frontend's `NEXT_PUBLIC_API_BASE` at it.
+- Lock down CORS with `CORS_ALLOW_ORIGINS` (see above / `backend/.env.example`).
+- Note: file uploads are up to 15 MB, so avoid Lambda + API Gateway (≤10 MB body).
 
 ## API
 

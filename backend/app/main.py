@@ -10,6 +10,7 @@ GET  /api/sample/{which}      - download a ready-made sample file to try the too
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -21,10 +22,28 @@ from .reconcile import DEFAULT_TOLERANCE, reconcile
 
 app = FastAPI(title="GST Reconciliation API", version="1.0.0")
 
-# Dev CORS: the Next.js app runs on a different port.
+
+def _cors_origins() -> list[str]:
+    """Allowed CORS origins from the CORS_ALLOW_ORIGINS env var.
+
+    Comma-separated list, e.g.
+        CORS_ALLOW_ORIGINS="https://app.example.com,https://www.example.com"
+    Unset or "*" allows any origin (handy for local dev).
+    """
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+    if not raw or raw == "*":
+        return ["*"]
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
+# CORS: the frontend is served from a different origin than this API.
+# Configure allowed origins per environment via env vars; a regex is also
+# supported for wildcard hosts (e.g. AWS Amplify branch URLs):
+#     CORS_ALLOW_ORIGIN_REGEX="https://.*\\.amplifyapp\\.com"
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins(),
+    allow_origin_regex=os.getenv("CORS_ALLOW_ORIGIN_REGEX") or None,
     allow_methods=["*"],
     allow_headers=["*"],
 )
