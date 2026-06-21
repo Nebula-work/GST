@@ -7,8 +7,7 @@ export default function SiteFooter() {
       <div className="foot-left">
         <div className="foot-brand">GST Purchase Matcher</div>
         <div className="foot-sub">
-          Uploaded files are processed in memory and never stored. · FastAPI +
-          Next.js for GSTR-2A / 2B reconciliation. ·{" "}
+          Uploaded files are processed in memory and never stored. GSTR-2A / 2B reconciliation. ·{" "}
           <Link href="/privacy" className="foot-link">
             Privacy
           </Link>
