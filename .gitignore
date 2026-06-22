@@ -20,3 +20,8 @@ next-env.d.ts
 *.swp
 .idea/
 .vscode/
+
+# Local taxpayer data dropped in the repo root (real GSTINs / financials).
+# Generated sample workbooks under backend/sample_data/ stay tracked.
+/*.xlsx
+/*.xls

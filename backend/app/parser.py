@@ -30,43 +30,55 @@ import openpyxl
 # Matching is done on a normalised form of the header text (lowercased,
 # punctuation / currency symbols stripped) so "Integrated Tax(₹)" and
 # "IGST Amount" both resolve to `igst`.
+#
+# Order matters: aliases are ranked by their position in each list, and when
+# two columns both resolve to the same field the better-ranked (earlier) alias
+# wins. So put the *specific* names first and generic catch-alls ("Date",
+# "Total") last — e.g. a Tally day-book has both a voucher "Date" and a
+# "Supplier Invoice Date"; the latter is the one to reconcile against.
 COLUMN_ALIASES: dict[str, list[str]] = {
     "gstin": [
         "GSTIN of supplier", "GSTIN/UIN of supplier", "GSTIN of the supplier",
-        "Supplier GSTIN", "GSTIN", "GSTIN/UIN", "GST No", "GSTIN No",
-        "Supplier GST", "Party GSTIN",
+        "Supplier GSTIN", "GSTIN/UIN", "GSTIN No", "GSTIN", "GST No",
+        "Supplier GST", "Party GSTIN", "GSTIN/UIN of Recipient",
     ],
     "supplier_name": [
         "Trade/Legal name", "Trade / Legal name", "Trade Name", "Legal Name",
         "Supplier Name", "Vendor Name", "Name of Supplier", "Party Name",
-        "Supplier", "Vendor", "Name",
+        "Particulars", "Supplier", "Vendor", "Name",
     ],
     "invoice_no": [
+        "Supplier Invoice No.", "Supplier Invoice No", "Supplier Invoice Number",
+        "Supplier Inv No", "Supplier Bill No",
         "Invoice number", "Invoice No", "Invoice No.", "Inv No", "Inv No.",
         "Bill No", "Bill Number", "Bill No.", "Document Number", "Voucher No",
         "Invoice", "Inv Number",
     ],
     "invoice_date": [
-        "Invoice Date", "Inv Date", "Bill Date", "Document Date", "Invoice Dt",
-        "Date", "Dated",
+        "Supplier Invoice Date", "Invoice Date", "Inv Date", "Bill Date",
+        "Document Date", "Invoice Dt", "Dated", "Date",
     ],
     "invoice_value": [
         "Invoice Value", "Total Invoice Value", "Invoice Amount", "Bill Amount",
-        "Total Amount", "Total Value", "Gross Total", "Grand Total", "Total",
+        "Gross Total", "Gross Amount", "Total Amount", "Total Value",
+        "Grand Total", "Total",
     ],
     "taxable_value": [
         "Taxable Value", "Taxable Amount", "Assessable Value", "Basic Amount",
+        "PURCHASE @ (GST)", "Purchase @ GST", "Purchase Value", "Purchase Amount",
         "Taxable", "Net Amount", "Base Amount",
     ],
     "igst": [
-        "Integrated Tax", "Integrated Tax Amount", "IGST", "IGST Amount", "I GST",
+        "Integrated Tax", "Integrated Tax Amount", "INPUT I-GST", "Input IGST",
+        "IGST", "IGST Amount", "I GST", "I-GST",
     ],
     "cgst": [
-        "Central Tax", "Central Tax Amount", "CGST", "CGST Amount", "C GST",
+        "Central Tax", "Central Tax Amount", "INPUT C-GST", "Input CGST",
+        "CGST", "CGST Amount", "C GST", "C-GST",
     ],
     "sgst": [
-        "State/UT Tax", "State Tax", "State/UT Tax Amount", "SGST",
-        "SGST Amount", "S GST", "SGST/UTGST",
+        "State/UT Tax", "State Tax", "State/UT Tax Amount", "INPUT S-GST",
+        "Input SGST", "SGST", "SGST Amount", "S GST", "S-GST", "SGST/UTGST",
     ],
     "cess": [
         "Cess", "Cess Amount", "GST Cess",
@@ -101,11 +113,16 @@ def _norm_header(text: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", s)
 
 
-# Reverse lookup: normalised alias -> canonical field name.
-_ALIAS_LOOKUP: dict[str, str] = {}
+# Reverse lookup: normalised alias -> (canonical field name, rank).
+# `rank` is the alias's position within its field list (lower = more specific /
+# higher priority). When two columns map to the same field, the lower rank wins.
+_ALIAS_LOOKUP: dict[str, tuple[str, int]] = {}
 for _field, _aliases in COLUMN_ALIASES.items():
-    for _alias in _aliases:
-        _ALIAS_LOOKUP[_norm_header(_alias)] = _field
+    for _rank, _alias in enumerate(_aliases):
+        _key = _norm_header(_alias)
+        # keep the best (lowest) rank if an alias normalises to an existing key
+        if _key and (_key not in _ALIAS_LOOKUP or _rank < _ALIAS_LOOKUP[_key][1]):
+            _ALIAS_LOOKUP[_key] = (_field, _rank)
 
 
 def parse_amount(value: Any) -> float:
@@ -167,29 +184,155 @@ def norm_invoice(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
 
 
-def _detect_header(rows: list[list[Any]]) -> tuple[int, dict[str, int]] | None:
-    """Find the row that looks most like a header and map its columns.
+def _build_mapping(block: list[list[Any]]) -> dict[str, int]:
+    """Map columns -> canonical fields for a header block of 1 or 2 rows.
 
-    Returns (header_row_index, {canonical_field: column_index}) or None.
+    Government exports (GSTR-2A/2B) split the header across two rows: a top
+    row of group labels ("Invoice Details", "Tax Amount") with the real column
+    names ("Invoice number", "Integrated Tax(₹)") in the row below, joined by
+    merged cells. To read those we look at every header cell stacked in a
+    column — across both rows and their concatenation — and keep the best
+    (lowest-rank) alias match per field.
     """
-    best_row = -1
-    best_mapping: dict[str, int] = {}
-    for idx, row in enumerate(rows[:HEADER_SCAN_ROWS]):
-        mapping: dict[str, int] = {}
-        for col, cell in enumerate(row):
-            field = _ALIAS_LOOKUP.get(_norm_header(cell))
-            if field and field not in mapping:
-                mapping[field] = col
-        # a believable header has at least an id-ish column + an amount column
-        score = len(mapping)
-        has_key = "gstin" in mapping or "invoice_no" in mapping
-        has_amount = any(f in mapping for f in
-                         ("taxable_value", "igst", "cgst", "sgst", "invoice_value"))
-        if has_key and has_amount and score > len(best_mapping):
-            best_row, best_mapping = idx, mapping
-    if best_row < 0:
-        return None
-    return best_row, best_mapping
+    ncols = max((len(r) for r in block), default=0)
+    best: dict[str, tuple[int, int]] = {}  # field -> (rank, col)
+    for col in range(ncols):
+        cells = [r[col] for r in block
+                 if col < len(r) and r[col] is not None and str(r[col]).strip()]
+        if not cells:
+            continue
+        # Prefer the bottom-most row's label (the specific column name, e.g.
+        # "Taxable Value") over a merged group label stacked above it (e.g.
+        # "Total"); fall back to the rows joined together.
+        candidates = [str(c) for c in reversed(cells)]
+        if len(cells) > 1:
+            candidates.append(" ".join(str(c) for c in cells))
+        col_hit: tuple[str, int] | None = None
+        for text in candidates:
+            col_hit = _ALIAS_LOOKUP.get(_norm_header(text))
+            if col_hit is not None:
+                break
+        if col_hit is None:
+            continue
+        field, rank = col_hit
+        cur = best.get(field)
+        # When two columns map to the same field, the better-ranked alias wins.
+        if cur is None or rank < cur[0]:
+            best[field] = (rank, col)
+    return {field: col for field, (rank, col) in best.items()}
+
+
+_AMOUNT_FIELDS = ("taxable_value", "igst", "cgst", "sgst", "cess",
+                  "invoice_value")
+
+
+def _looks_like_header(mapping: dict[str, int]) -> bool:
+    """A believable header has an identity column AND an amount column."""
+    has_key = "gstin" in mapping or "invoice_no" in mapping
+    has_amount = any(f in mapping for f in _AMOUNT_FIELDS)
+    return has_key and has_amount
+
+
+def _is_numeric_cell(value: Any) -> bool:
+    """True if the cell carries an actual number (not a header label)."""
+    if value is None or isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float, datetime, date)):
+        return True
+    s = str(value).strip().replace(",", "").replace("₹", "").replace("%", "")
+    if not s:
+        return False
+    if s.startswith("(") and s.endswith(")"):
+        s = s[1:-1]
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_data_row(row: list[Any], mapping: dict[str, int]) -> bool:
+    """A data row carries real values in the amount/date columns; a header (or
+    merged sub-header) row carries text labels or blanks there."""
+    for field in _AMOUNT_FIELDS:
+        col = mapping.get(field)
+        if col is not None and col < len(row) and _is_numeric_cell(row[col]):
+            return True
+    dcol = mapping.get("invoice_date")
+    if dcol is not None and dcol < len(row) and isinstance(row[dcol], (date, datetime)):
+        return True
+    return False
+
+
+def _detect_header_blocks(
+        rows: list[list[Any]]) -> list[tuple[list[int], dict[str, int]]]:
+    """Find every header block in a sheet (supports stacked tables).
+
+    A header may span more than one row: government exports (GSTR-2A/2B) stack a
+    group-label row on top of the real column-name row, joined by merged cells.
+    We anchor on each row that on its own looks like a header, then grow the
+    block into adjacent rows that are NOT data rows and that contribute extra
+    columns. Data begins on the row after the block; it ends where the next
+    block begins (or at end of sheet).
+
+    Returns a list of (header_row_indices, {canonical_field: column_index}) in
+    top-to-bottom order.
+    """
+    scan = min(len(rows), HEADER_SCAN_ROWS)
+    blocks: list[tuple[list[int], dict[str, int]]] = []
+    consumed = [False] * len(rows)
+
+    i = 0
+    while i < scan:
+        if consumed[i] or not _looks_like_header(_build_mapping([rows[i]])):
+            i += 1
+            continue
+        top = bottom = i
+        # Grow upward through merged group-label rows sitting above the anchor:
+        # any adjacent non-data row that still carries header labels is part of
+        # the header (it may add columns OR just refine one, e.g. a "Total"
+        # group label above the real "Taxable Value" column name).
+        while top - 1 >= 0 and not consumed[top - 1]:
+            prev = rows[top - 1]
+            if _is_data_row(prev, _build_mapping(rows[top:bottom + 1])):
+                break
+            if _build_mapping([prev]):
+                top -= 1
+            else:
+                break
+        # Grow downward through sub-label rows sitting below the anchor.
+        while bottom + 1 < len(rows):
+            nxt = rows[bottom + 1]
+            if _is_data_row(nxt, _build_mapping(rows[top:bottom + 1])):
+                break
+            if _build_mapping([nxt]):
+                bottom += 1
+            else:
+                break
+        mapping = _build_mapping(rows[top:bottom + 1])
+        for r in range(top, bottom + 1):
+            consumed[r] = True
+        blocks.append((list(range(top, bottom + 1)), mapping))
+        i = bottom + 1
+    return blocks
+
+
+def _header_label(block: list[list[Any]], col: int) -> str | None:
+    """Human-readable header text for a mapped column (for the meta report).
+
+    Prefer the cell that actually resolved to a canonical field (the real column
+    name, e.g. "Integrated Tax(₹)") over a merged group label above it
+    (e.g. "Tax Amount"); fall back to the first non-empty cell.
+    """
+    fallback: str | None = None
+    for row in reversed(block):  # bottom row holds the specific column name
+        if col < len(row) and row[col] is not None and str(row[col]).strip():
+            text = str(row[col]).strip()
+            if fallback is None:
+                fallback = text
+            if _norm_header(text) in _ALIAS_LOOKUP:
+                return text
+    return fallback
 
 
 def _is_blank(v: Any) -> bool:
@@ -235,28 +378,36 @@ def parse_workbook(content: bytes, source: str) -> dict[str, Any]:
     try:
         for sheet in wb.worksheets:
             all_rows = _stream_rows(sheet)
-            detected = _detect_header(all_rows)
-            if detected is None:
+            blocks = _detect_header_blocks(all_rows)
+            if not blocks:
                 continue
-            header_idx, mapping = detected
-            sheet_records = _parse_sheet(all_rows, header_idx, mapping, source,
-                                         sheet.title)
-            if not sheet_records:
-                continue
-            sheets_parsed.append(sheet.title)
-            if not primary_columns:  # report the first real sheet's headers
-                header = all_rows[header_idx]
-                primary_columns = {
-                    field: (str(header[col]) if _cell(header, col) is not None else None)
-                    for field, col in mapping.items()
-                }
-            records.extend(sheet_records)
-            if len(records) >= MAX_RECORDS:
-                records = records[:MAX_RECORDS]
-                truncated = True
-                warnings.append(
-                    f"Only the first {MAX_RECORDS:,} invoice rows were read "
-                    f"from the {source} file (it is very large).")
+            for bi, (header_rows, mapping) in enumerate(blocks):
+                # Each table's data runs from just after its header up to the
+                # next table's header (or end of sheet).
+                data_start = header_rows[-1] + 1
+                data_end = (blocks[bi + 1][0][0] if bi + 1 < len(blocks)
+                            else len(all_rows))
+                sheet_records = _parse_sheet(all_rows, data_start, data_end,
+                                             mapping, source, sheet.title)
+                if not sheet_records:
+                    continue
+                if sheet.title not in sheets_parsed:
+                    sheets_parsed.append(sheet.title)
+                if not primary_columns:  # report the first real header's columns
+                    header_block = [all_rows[i] for i in header_rows]
+                    primary_columns = {
+                        field: _header_label(header_block, col)
+                        for field, col in mapping.items()
+                    }
+                records.extend(sheet_records)
+                if len(records) >= MAX_RECORDS:
+                    records = records[:MAX_RECORDS]
+                    truncated = True
+                    warnings.append(
+                        f"Only the first {MAX_RECORDS:,} invoice rows were read "
+                        f"from the {source} file (it is very large).")
+                    break
+            if truncated:
                 break
     finally:
         wb.close()
@@ -278,7 +429,7 @@ def parse_workbook(content: bytes, source: str) -> dict[str, Any]:
     }
 
 
-def _parse_sheet(all_rows: list[list[Any]], header_idx: int,
+def _parse_sheet(all_rows: list[list[Any]], data_start: int, data_end: int,
                  mapping: dict[str, int], source: str,
                  sheet_title: str) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
@@ -287,7 +438,7 @@ def _parse_sheet(all_rows: list[list[Any]], header_idx: int,
     g_col, s_col = mapping.get("gstin"), mapping.get("supplier_name")
     i_col = mapping.get("invoice_no")
 
-    for r_idx in range(header_idx + 1, len(all_rows)):
+    for r_idx in range(data_start, data_end):
         row = all_rows[r_idx]
         gstin_raw = _cell(row, g_col)
         supplier_raw = _cell(row, s_col)
