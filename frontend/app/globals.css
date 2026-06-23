@@ -1028,3 +1028,10 @@ footer.foot {
     transform: rotate(360deg);
   }
 }
+
+/* Cloudflare Turnstile widget */
+.turnstile-row {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}

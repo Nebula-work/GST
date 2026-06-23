@@ -16,11 +16,14 @@ export async function reconcile(
   portalFile: File,
   purchaseFile: File,
   tolerance: number,
+  turnstileToken?: string | null,
 ): Promise<ReconResult> {
   const form = new FormData();
   form.append("portal_file", portalFile);
   form.append("purchase_file", purchaseFile);
   form.append("tolerance", String(tolerance));
+  // Cloudflare Turnstile token (only present when the widget is enabled).
+  if (turnstileToken) form.append("cf-turnstile-response", turnstileToken);
 
   let res: Response;
   try {

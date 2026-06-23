@@ -27,6 +27,11 @@ jobs:
 
       - name: Build frontend (static export)
         working-directory: frontend
+        env:
+          # Public Turnstile site key, baked into the static build. Safe to keep
+          # here (it's exposed in the page HTML anyway). The matching SECRET is
+          # set on the server (systemd), never in the repo.
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 0x4AAAAAADpj-1bDTbRNjFDD
         run: |
           npm ci
           npm run build          # -> frontend/out  (API calls are relative /api)

@@ -38,6 +38,9 @@ Environment=TRUST_PROXY=true
 # Environment=RATE_LIMIT_WINDOW_SECONDS=60
 # Environment=MAX_CONCURRENT_RECONCILES=2
 # Environment=RECONCILE_TIMEOUT_SECONDS=30
+# Cloudflare Turnstile secret — REQUIRED to enforce the bot check. Paste the
+# secret from your Turnstile widget here (do not commit it to git).
+# Environment=TURNSTILE_SECRET_KEY=your-cloudflare-turnstile-secret
 
 # --- DoS backstop: bound this worker's resources so a pathological upload can
 #     never take the whole box down (OOM-killing nginx/sshd) or pin every core.
