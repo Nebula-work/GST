@@ -3,7 +3,9 @@
 #   sudo cp deploy/gst-backend.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now gst-backend
-# Adjust the paths below if you cloned somewhere other than /home/ubuntu/gst.
+# Paths below must match where the repo is cloned. The CI/CD pipeline clones to
+# /home/ubuntu/GST (see .github/workflows/deploy.yml) — keep these in sync. Note
+# Linux paths are case-sensitive: /home/ubuntu/GST != /home/ubuntu/gst.
 
 [Unit]
 Description=GST Purchase Matcher API (FastAPI/uvicorn)
@@ -15,12 +17,12 @@ StartLimitBurst=5
 [Service]
 Type=simple
 User=ubuntu
-WorkingDirectory=/home/ubuntu/gst/backend
+WorkingDirectory=/home/ubuntu/GST/backend
 # --limit-concurrency caps in-flight connections; the app itself offloads the
 # CPU-bound parse/reconcile to a threadpool (so health checks stay live) and
 # gates how many run at once. Single worker keeps the in-app rate limiter and
 # concurrency gate authoritative; nginx provides the cross-process per-IP limit.
-ExecStart=/home/ubuntu/gst/backend/.venv/bin/uvicorn app.main:app \
+ExecStart=/home/ubuntu/GST/backend/.venv/bin/uvicorn app.main:app \
     --host 127.0.0.1 --port 8011 \
     --limit-concurrency 64 --timeout-keep-alive 5
 Restart=always
