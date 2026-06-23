@@ -27,6 +27,23 @@ from typing import Any
 # (absorbs rounding noise between the portal and the books).
 DEFAULT_TOLERANCE = 1.0
 
+# --- DoS bounds for the matcher --------------------------------------------
+# Matching is inherently quadratic in the worst case (the fuzzy fallback compares
+# leftover portal rows against leftover purchase rows). Without bounds, a small
+# upload of deliberately non-matching rows could pin a worker for minutes/hours.
+# These caps keep real data near-linear while making the adversarial worst case
+# finite. They never affect a normal reconciliation: in real data, exact matches
+# in pass 1 consume almost everything, so few rows reach the fuzzy pass.
+MAX_ROWS_PER_KEY = 50            # exact-match rows considered per (gstin, invoice) key
+MAX_SECONDARY_BUCKET = 256       # cross-GSTIN fuzzy candidates per invoice-block / amount bucket
+# Pass 2 charges each fuzzy comparison its real cost: difflib.SequenceMatcher is
+# ~O(len_a * len_b), so a *count* cap wouldn't bound wall-clock (a 64-char key is
+# ~35x dearer than an 8-char one). We budget character-work instead, which keeps
+# the worst case to a couple of seconds regardless of how long the (capped)
+# invoice strings are. Real invoice numbers are short, so legit data — which only
+# fuzzy-matches the handful of rows left after exact matching — never hits this.
+FUZZY_WORK_BUDGET = 20_000_000   # cap on sum(len_a * len_b) across pass 2
+
 # Fields compared when deciding matched vs mismatch, with friendly labels.
 COMPARE_FIELDS: list[tuple[str, str]] = [
     ("taxable_value", "Taxable Value"),
@@ -140,6 +157,21 @@ def _remark_for_pair(diffs: list[dict[str, Any]], match_type: str) -> str:
             else "Matched after normalising invoice no.; all values agree.")
 
 
+def _invblock(inv: str) -> tuple[int, str]:
+    """Cheap blocking key for cross-GSTIN fuzzy candidates: two invoice numbers
+    that could be ~90% similar share a length and their leading characters, so
+    we only fuzzy-compare within the same block instead of all-vs-all."""
+    return (len(inv), inv[:4])
+
+
+def _amt_key(taxable: float) -> int:
+    """Rupee-rounded amount key. The cross-GSTIN accept rule requires matching
+    amounts, so bucketing leftovers by amount catches a GSTIN-typo pair even
+    when its invoice number differs in length / leading chars (which would put
+    it in a different _invblock)."""
+    return int(round(taxable))
+
+
 def _fuzzy_score(portal: dict[str, Any], purchase: dict[str, Any],
                  tol: float) -> float | None:
     """Score a candidate probable-match pair, or None if not acceptable."""
@@ -181,16 +213,31 @@ def reconcile(portal: list[dict[str, Any]], purchase: list[dict[str, Any]],
         return (r["gstin_norm"], r["invoice_norm"])
 
     # --- pass 1: exact key (GSTIN + normalised invoice no.) ---------------
+    # Cap how many rows we index/pair per identical key. Beyond a small number,
+    # rows sharing one (gstin, invoice) key are duplicate entries; scanning the
+    # whole bucket for every same-key row would be O(bucket^2), so a cheap upload
+    # of N identical-key rows could pin the worker. Overflow rows fall through
+    # and are flagged as duplicates below (key ∈ matched_keys).
     portal_by_key: dict[tuple[str, str], list[int]] = {}
     for i, r in enumerate(portal):
         if has_identity(r):
-            portal_by_key.setdefault(key_of(r), []).append(i)
+            bucket = portal_by_key.setdefault(key_of(r), [])
+            if len(bucket) < MAX_ROWS_PER_KEY:
+                bucket.append(i)
 
     matched_keys: set[tuple[str, str]] = set()
+    purchase_seen_per_key: dict[tuple[str, str], int] = {}
     for j, pr in enumerate(purchase):
         if not has_identity(pr):
             continue
-        cands = [pi for pi in portal_by_key.get(key_of(pr), []) if pi not in used_portal]
+        k = key_of(pr)
+        # Only the first MAX_ROWS_PER_KEY purchase rows of a key are paired; the
+        # rest are duplicates (and bucket is already capped, so this scan is O(cap)).
+        seen = purchase_seen_per_key.get(k, 0)
+        purchase_seen_per_key[k] = seen + 1
+        if seen >= MAX_ROWS_PER_KEY:
+            continue
+        cands = [pi for pi in portal_by_key.get(k, []) if pi not in used_portal]
         if not cands:
             continue
         # Among portal rows sharing this invoice no., take the one whose amounts
@@ -199,7 +246,7 @@ def reconcile(portal: list[dict[str, Any]], purchase: list[dict[str, Any]],
         pairs.append((best_pi, j, "exact"))
         used_portal.add(best_pi)
         used_purchase.add(j)
-        matched_keys.add(key_of(pr))
+        matched_keys.add(k)
 
     # Leftover rows whose key was already consumed by an exact match are
     # duplicate entries (the same bill typed twice). Set them aside so they
@@ -210,23 +257,80 @@ def reconcile(portal: list[dict[str, Any]], purchase: list[dict[str, Any]],
                     if j not in used_purchase and has_identity(r) and key_of(r) in matched_keys}
 
     # --- pass 2: fuzzy / probable matches on the leftovers ----------------
+    # Index the leftovers so each purchase row only scores a small candidate set
+    # instead of every remaining portal row. The two strong accept rules in
+    # _fuzzy_score require an equal GSTIN, so bucket by gstin_norm; the only
+    # cross-GSTIN rule needs a near-identical invoice number OR an equal amount,
+    # so also index by a cheap invoice block (length + leading chars) and by
+    # rounded amount. This keeps real data near-linear while still finding the
+    # same matches, and a global work budget caps the adversarial worst case.
     rem_portal = [i for i in range(len(portal))
                   if i not in used_portal and i not in dup_portal]
+    portal_by_gstin: dict[str, list[int]] = {}
+    portal_by_invblock: dict[tuple[int, str], list[int]] = {}
+    portal_by_amt: dict[int, list[int]] = {}
+    for pi in rem_portal:
+        r = portal[pi]
+        g = r["gstin_norm"]
+        if g:
+            portal_by_gstin.setdefault(g, []).append(pi)
+        inv = r["invoice_norm"]
+        if inv:
+            blk = portal_by_invblock.setdefault(_invblock(inv), [])
+            if len(blk) < MAX_SECONDARY_BUCKET:
+                blk.append(pi)
+        t = r["taxable_value"]
+        if t:
+            ab = portal_by_amt.setdefault(_amt_key(t), [])
+            if len(ab) < MAX_SECONDARY_BUCKET:
+                ab.append(pi)
+
+    work_budget = FUZZY_WORK_BUDGET
+    fuzzy_truncated = False
     for j in range(len(purchase)):
         if j in used_purchase or j in dup_purchase:
             continue
         pr = purchase[j]
+        # Candidate set = same-GSTIN rows (covers the two GSTIN-equal accept
+        # rules) + same invoice-block + same rounded amount (the last two cover
+        # the cross-GSTIN typo rule, which needs only a similar invoice OR an
+        # equal amount). A global work budget bounds the total comparisons.
+        cand_ids: set[int] = set()
+        g = pr["gstin_norm"]
+        if g:
+            cand_ids.update(portal_by_gstin.get(g, ()))
+        inv = pr["invoice_norm"]
+        if inv:
+            cand_ids.update(portal_by_invblock.get(_invblock(inv), ()))
+        t = pr["taxable_value"]
+        if t:
+            ak = _amt_key(t)
+            for k in (ak - 1, ak, ak + 1):  # ±1 rupee absorbs rounding/tolerance
+                cand_ids.update(portal_by_amt.get(k, ()))
+        if not cand_ids:
+            continue
+        cn_cost = len(pr["invoice_norm"]) + 1
         best_pi, best_score = None, 0.0
-        for pi in rem_portal:
+        # sorted() keeps the original index-order tie-breaking (deterministic).
+        for pi in sorted(cand_ids):
+            if work_budget <= 0:
+                fuzzy_truncated = True
+                break
+            p = portal[pi]
+            # Charge every candidate examined (incl. already-used skips) so the
+            # outer loop is bounded by total work, not just completed compares.
+            work_budget -= (len(p["invoice_norm"]) + 1) * cn_cost
             if pi in used_portal:
                 continue
-            score = _fuzzy_score(portal[pi], pr, tolerance)
+            score = _fuzzy_score(p, pr, tolerance)
             if score is not None and score > best_score:
                 best_pi, best_score = pi, score
         if best_pi is not None:
             pairs.append((best_pi, j, "probable"))
             used_portal.add(best_pi)
             used_purchase.add(j)
+        if fuzzy_truncated:
+            break
 
     # --- build the reconciled rows ---------------------------------------
     matched: list[dict[str, Any]] = []
@@ -283,12 +387,21 @@ def reconcile(portal: list[dict[str, Any]], purchase: list[dict[str, Any]],
     summary = _build_summary(portal, purchase, matched, mismatched,
                              only_in_portal, only_in_purchase)
 
+    warnings: list[str] = []
+    if fuzzy_truncated:
+        warnings.append(
+            "Too many unmatched rows to fuzzy-compare safely, so probable-match "
+            "detection was stopped early; some rows that might be formatting "
+            "variants are listed as 'only in portal' / 'only in books'."
+        )
+
     return {
         "summary": summary,
         "matched": matched,
         "mismatched": mismatched,
         "only_in_portal": only_in_portal,
         "only_in_purchase": only_in_purchase,
+        "warnings": warnings,
     }
 
 

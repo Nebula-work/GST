@@ -8,18 +8,57 @@
 [Unit]
 Description=GST Purchase Matcher API (FastAPI/uvicorn)
 After=network.target
+# Don't crash-loop into sustained abuse: if it restarts 5x in 60s, back off.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/gst/backend
-ExecStart=/home/ubuntu/gst/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8011
+# --limit-concurrency caps in-flight connections; the app itself offloads the
+# CPU-bound parse/reconcile to a threadpool (so health checks stay live) and
+# gates how many run at once. Single worker keeps the in-app rate limiter and
+# concurrency gate authoritative; nginx provides the cross-process per-IP limit.
+ExecStart=/home/ubuntu/gst/backend/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 --port 8011 \
+    --limit-concurrency 64 --timeout-keep-alive 5
 Restart=always
 RestartSec=3
 
-# Bound to localhost and proxied by nginx (same origin) -> no CORS needed.
-# If you ever expose it directly, restrict origins instead:
-# Environment=CORS_ALLOW_ORIGINS=https://gst.sysmos.org
+# Lock the API to the real frontend origin instead of the wildcard CORS default.
+Environment=CORS_ALLOW_ORIGINS=https://gst.sysmos.org
+# Behind nginx, trust its forwarded client IP for rate limiting (default true).
+# Set to false only if this service is exposed directly to the internet.
+Environment=TRUST_PROXY=true
+# Abuse limits (also have sane built-in defaults; override here if needed):
+# Environment=RATE_LIMIT_REQUESTS=20
+# Environment=RATE_LIMIT_WINDOW_SECONDS=60
+# Environment=MAX_CONCURRENT_RECONCILES=2
+# Environment=RECONCILE_TIMEOUT_SECONDS=30
+
+# --- DoS backstop: bound this worker's resources so a pathological upload can
+#     never take the whole box down (OOM-killing nginx/sshd) or pin every core.
+#     Tune MemoryMax/High to the instance RAM (these suit a ~2 GB box).
+MemoryHigh=768M
+MemoryMax=1024M
+CPUQuota=85%
+TasksMax=256
+
+# --- Sandboxing: shrink the blast radius. The app reads its code/venv (under
+#     /home, read-only is fine) and writes nothing except spooled uploads in a
+#     private /tmp. Relax these only if you add on-disk writes.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+# AF_UNIX is required locally for asyncio's event-loop self-pipe (socketpair)
+# and the threadpool — omitting it makes the service fail to start. AF_INET(6)
+# is the TCP listener on 127.0.0.1. This does not widen network exposure.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

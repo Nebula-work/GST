@@ -17,11 +17,15 @@ list of clean invoice records that the reconciliation engine can compare.
 from __future__ import annotations
 
 import io
+import logging
 import re
+import zipfile
 from datetime import date, datetime
 from typing import Any
 
 import openpyxl
+
+logger = logging.getLogger(__name__)
 
 
 # --- canonical fields ------------------------------------------------------
@@ -97,6 +101,28 @@ HEADER_SCAN_ROWS = 200      # how deep to look for the header row
 MAX_COLS = 64               # columns kept per row
 MAX_ROWS_PER_SHEET = 200_000
 MAX_RECORDS = 100_000       # total invoice rows across all sheets
+MAX_CELL_CHARS = 4_096      # truncate any single cell's text to this length
+
+# Decompression-bomb guard. An .xlsx is a zip, so a tiny upload can declare
+# (and openpyxl will materialise) gigabytes of XML. We inspect the zip's
+# central directory *before* parsing and refuse files that would expand to an
+# unreasonable size. A real, large GSTR-2B / purchase register decompresses to
+# well under these limits.
+# openpyxl (read_only) still materialises the shared-strings table as Python
+# str objects at roughly 8-9x the uncompressed XML, so keep these well below the
+# systemd MemoryMax. A real 100k-row export is ~46 MB uncompressed, so 128 MB
+# total / 96 MB per member leaves headroom while rejecting the obvious bombs.
+MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024   # 128 MB across all members
+MAX_MEMBER_BYTES = 96 * 1024 * 1024          # 96 MB for any single member
+MAX_COMPRESSION_RATIO = 100                  # uncompressed / compressed (bombs are ~1000x)
+RATIO_CHECK_FLOOR = 16 * 1024 * 1024         # only apply the ratio test above 16 MB
+
+# Match keys are normalised then length-capped: legitimate GSTINs are 15 chars
+# and invoice numbers a handful more, so capping here bounds every downstream
+# difflib.SequenceMatcher comparison to constant work (an attacker can otherwise
+# smuggle a 50k-char invoice "number" that makes each fuzzy compare quadratic).
+MAX_GSTIN_KEY = 20
+MAX_INVOICE_KEY = 64
 
 # Footer / subtotal rows ("Total", "Grand Total", …) that must never be read
 # as invoices even though they carry amounts.
@@ -176,12 +202,16 @@ def parse_date(value: Any) -> tuple[str | None, date | None]:
 
 
 def norm_gstin(value: Any) -> str:
-    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())[:MAX_GSTIN_KEY]
 
 
 def norm_invoice(value: Any) -> str:
-    """Normalise an invoice number for matching (INV-001 == inv 001)."""
-    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+    """Normalise an invoice number for matching (INV-001 == inv 001).
+
+    Length-capped: a normalised key longer than a real invoice number only
+    happens with crafted input and would make every fuzzy comparison expensive.
+    """
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())[:MAX_INVOICE_KEY]
 
 
 def _build_mapping(block: list[list[Any]]) -> dict[str, int]:
@@ -343,14 +373,54 @@ def _cell(row: list[Any], col: int | None) -> Any:
     return row[col] if col is not None and col < len(row) else None
 
 
+def _clip_cell(value: Any) -> Any:
+    """Truncate an over-long text cell so one giant string can't bloat memory
+    or the JSON response. Numbers/dates pass through untouched."""
+    if isinstance(value, str) and len(value) > MAX_CELL_CHARS:
+        return value[:MAX_CELL_CHARS]
+    return value
+
+
 def _stream_rows(sheet) -> list[list[Any]]:
     """Read a sheet with hard row/column caps (avoids huge-dimension DoS)."""
     rows: list[list[Any]] = []
     for r in sheet.iter_rows(values_only=True):
-        rows.append(list(r[:MAX_COLS]))
+        rows.append([_clip_cell(c) for c in r[:MAX_COLS]])
         if len(rows) >= MAX_ROWS_PER_SHEET:
             break
     return rows
+
+
+def _guard_against_zip_bomb(content: bytes, source: str) -> None:
+    """Refuse an .xlsx that decompresses to an unreasonable size.
+
+    Inspects the zip central directory (cheap, no decompression) and rejects
+    files whose total/biggest member is huge or whose compression ratio is
+    abnormal. Non-zip input is left for openpyxl to reject with a clean error.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            infos = zf.infolist()
+    except (zipfile.BadZipFile, OSError):
+        return  # not a usable zip; load_workbook will surface a clean error
+    if not infos:
+        return
+    total_uncompressed = sum(i.file_size for i in infos)
+    total_compressed = sum(i.compress_size for i in infos) or 1
+    largest_member = max(i.file_size for i in infos)
+
+    if (total_uncompressed > MAX_UNCOMPRESSED_BYTES
+            or largest_member > MAX_MEMBER_BYTES):
+        raise ValueError(
+            f"The {source} file expands to too much data when decompressed and "
+            f"was rejected as unsafe. Please upload a normal .xlsx export."
+        )
+    if (total_uncompressed > RATIO_CHECK_FLOOR
+            and total_uncompressed / total_compressed > MAX_COMPRESSION_RATIO):
+        raise ValueError(
+            f"The {source} file has an abnormal compression ratio and was "
+            f"rejected as unsafe. Please upload a normal .xlsx export."
+        )
 
 
 def parse_workbook(content: bytes, source: str) -> dict[str, Any]:
@@ -362,12 +432,17 @@ def parse_workbook(content: bytes, source: str) -> dict[str, Any]:
 
     `source` is a label ("portal" or "purchase") used in messages.
     """
+    _guard_against_zip_bomb(content, source)
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True,
                                     read_only=True)
     except Exception as exc:  # noqa: BLE001 - surface a clean error to the API
-        raise ValueError(f"Could not read the {source} file as an Excel "
-                         f"workbook (.xlsx): {exc}") from exc
+        # Log the library-specific detail server-side; don't leak it to clients.
+        logger.warning("Could not open %s workbook: %r", source, exc)
+        raise ValueError(
+            f"Could not read the {source} file as a valid Excel .xlsx workbook. "
+            f"Please re-save it from Excel and upload it again."
+        ) from exc
 
     records: list[dict[str, Any]] = []
     sheets_parsed: list[str] = []

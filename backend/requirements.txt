@@ -1,4 +1,7 @@
 fastapi>=0.110
 uvicorn>=0.27
-python-multipart>=0.0.9
+# >=0.0.18 clears CVE-2024-53981 (multipart parsing DoS). The multipart parser
+# runs before any app-level size check, so a vulnerable version is a direct
+# unauthenticated DoS surface — do not lower this floor.
+python-multipart>=0.0.18
 openpyxl>=3.1
