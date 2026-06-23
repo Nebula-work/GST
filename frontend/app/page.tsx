@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import FileDrop from "@/components/FileDrop";
 import SummaryCards from "@/components/SummaryCards";
 import ResultsTable from "@/components/ResultsTable";
 import SiteFooter from "@/components/SiteFooter";
+import Turnstile, { TURNSTILE_ENABLED, type TurnstileHandle } from "@/components/Turnstile";
 import { reconcile, loadSample } from "@/lib/api";
 import type { ReconResult, ReconRow, TabKey, UnmatchedRow } from "@/lib/types";
 import { inr } from "@/lib/format";
@@ -77,13 +78,24 @@ export default function Home() {
   const [result, setResult] = useState<ReconResult | null>(null);
   const [tab, setTab] = useState<TabKey>("mismatched");
   const [query, setQuery] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const turnstileRef = useRef<TurnstileHandle>(null);
 
   async function runReconcile() {
     if (!portalFile || !purchaseFile) return;
+    if (TURNSTILE_ENABLED && !turnstileToken) {
+      setError("Please complete the verification check first.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const res = await reconcile(portalFile, purchaseFile, Number(tolerance) || 0);
+      const res = await reconcile(
+        portalFile,
+        purchaseFile,
+        Number(tolerance) || 0,
+        turnstileToken,
+      );
       setResult(res);
       // Land on the first non-empty actionable tab.
       const firstNonEmpty =
@@ -95,6 +107,8 @@ export default function Home() {
       setResult(null);
     } finally {
       setLoading(false);
+      // Turnstile tokens are single-use; get a fresh one for the next run.
+      if (TURNSTILE_ENABLED) turnstileRef.current?.reset();
     }
   }
 
@@ -137,7 +151,8 @@ export default function Home() {
     return { pairs: [], singles: result.only_in_purchase.filter((r) => matchesQuery(r, query)) };
   }, [result, tab, query]);
 
-  const canRun = portalFile && purchaseFile && !loading;
+  const canRun =
+    portalFile && purchaseFile && !loading && (!TURNSTILE_ENABLED || !!turnstileToken);
 
   return (
     <main className="shell">
@@ -197,6 +212,12 @@ export default function Home() {
             {loading ? "Reconciling…" : "Reconcile"}
           </button>
         </div>
+
+        {TURNSTILE_ENABLED && (
+          <div className="turnstile-row">
+            <Turnstile ref={turnstileRef} onToken={setTurnstileToken} />
+          </div>
+        )}
 
         {error && <div className="alert">⚠ {error}</div>}
 

@@ -311,6 +311,36 @@ def test_endpoint_rate_limit_429():
     assert codes[:2] == [200, 200] and codes[2] == 429, codes
 
 
+def test_endpoint_turnstile(monkeypatch):
+    """When the Turnstile secret is set: missing token -> 403; bad token -> 403;
+    valid token -> 200. (Disabled by default, so other tests are unaffected.)"""
+    c = _client()
+    monkeypatch.setattr(main_mod, "TURNSTILE_SECRET", "test-secret")
+    # missing token
+    r = c.post("/api/reconcile", files=_files(_one_row(), _one_row()),
+               data={"tolerance": "1.0"})
+    assert r.status_code == 403 and "verification" in r.json()["detail"].lower()
+    # token present but Cloudflare says no
+    monkeypatch.setattr(main_mod, "_verify_turnstile", lambda tok, ip: False)
+    r = c.post("/api/reconcile", files=_files(_one_row(), _one_row()),
+               data={"tolerance": "1.0", "cf-turnstile-response": "x"})
+    assert r.status_code == 403
+    # token present and verified
+    monkeypatch.setattr(main_mod, "_verify_turnstile", lambda tok, ip: True)
+    r = c.post("/api/reconcile", files=_files(_one_row(), _one_row()),
+               data={"tolerance": "1.0", "cf-turnstile-response": "good-token"})
+    assert r.status_code == 200, r.text
+
+
+def test_endpoint_turnstile_disabled_by_default():
+    """With no secret set, no token is required (current/default behaviour)."""
+    c = _client()
+    assert main_mod.TURNSTILE_SECRET == ""  # not configured in tests
+    r = c.post("/api/reconcile", files=_files(_one_row(), _one_row()),
+               data={"tolerance": "1.0"})
+    assert r.status_code == 200, r.text
+
+
 def test_endpoint_concurrency_503():
     c = _client()
     main_mod._concurrency = ConcurrencyGate(1)

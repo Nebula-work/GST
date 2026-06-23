@@ -23,9 +23,12 @@ RAM; they are not a substitute for the nginx body cap. Run behind nginx in prod.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import anyio
@@ -107,25 +110,49 @@ _TRUSTED_PROXY_IPS = {"127.0.0.1", "::1"} | {
     ip.strip() for ip in os.getenv("TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
 }
 
+# Cloudflare Turnstile (bot/human check). Enabled only when the SECRET is set —
+# the public site key lives in the frontend. Leave the secret unset for local
+# dev/tests and verification is skipped.
+TURNSTILE_SECRET = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+
 _rate_limiter = SlidingWindowRateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW)
 _concurrency = ConcurrencyGate(MAX_CONCURRENT)
 _MB = 1024 * 1024
 
+# Dedicated limiter for the CPU-bound parse/reconcile. asyncio.wait_for cancels
+# the *await* on timeout but not the worker thread (sync CPU can't be
+# interrupted), so a timed-out job keeps running and holds its token until it
+# truly finishes — capping live reconcile threads to MAX_CONCURRENT even when the
+# (fast-503) ConcurrencyGate is released early. Kept separate from the default
+# threadpool so quick I/O like the Turnstile call isn't starved by it.
+_reconcile_limiter: "anyio.CapacityLimiter | None" = None
+
 
 @app.on_event("startup")
-async def _bound_threadpool() -> None:
-    """Cap the threadpool so abandoned (timed-out) CPU jobs can't accumulate.
-
-    asyncio.wait_for cancels the *await*, not the worker thread running the
-    synchronous parse/reconcile, so a timed-out job keeps running. Sizing the
-    anyio thread limiter to MAX_CONCURRENT means new heavy work blocks at the
-    threadpool layer until a slot frees, bounding live CPU threads regardless of
-    the (fast-503) ConcurrencyGate being released early.
-    """
+async def _init_reconcile_limiter() -> None:
+    global _reconcile_limiter
     try:
-        anyio.to_thread.current_default_thread_limiter().total_tokens = max(1, MAX_CONCURRENT)
-    except Exception as exc:  # noqa: BLE001 - never block startup on this
-        logger.warning("Could not size the threadpool limiter: %r", exc)
+        _reconcile_limiter = anyio.CapacityLimiter(max(1, MAX_CONCURRENT))
+    except Exception as exc:  # noqa: BLE001 - fall back to the default limiter
+        logger.warning("Could not create reconcile limiter: %r", exc)
+
+
+def _verify_turnstile(token: str, remote_ip: str) -> bool:
+    """Validate a Turnstile token with Cloudflare (synchronous; run off-loop).
+
+    Uses stdlib urllib so the backend gains no new runtime dependency.
+    """
+    payload = urllib.parse.urlencode(
+        {"secret": TURNSTILE_SECRET, "response": token, "remoteip": remote_ip}
+    ).encode()
+    try:
+        req = urllib.request.Request(TURNSTILE_VERIFY_URL, data=payload, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return bool(json.loads(resp.read().decode()).get("success"))
+    except Exception as exc:  # noqa: BLE001 - treat any failure as "not verified"
+        logger.warning("Turnstile verification error: %r", exc)
+        return False
 
 
 @app.get("/api/health")
@@ -212,12 +239,25 @@ async def reconcile_endpoint(
     portal_file: UploadFile = File(..., description="GST portal export (GSTR-2A/2B)"),
     purchase_file: UploadFile = File(..., description="Your purchase register"),
     tolerance: float = Form(DEFAULT_TOLERANCE),
+    turnstile_token: str = Form("", alias="cf-turnstile-response"),
 ):
     # 1) Cheapest rejection first: per-client rate limit.
-    if not _rate_limiter.allow(_client_ip(request)):
+    client = _client_ip(request)
+    if not _rate_limiter.allow(client):
         raise HTTPException(
             status_code=429,
             detail="Too many requests. Please wait a few seconds and try again.")
+
+    # 1b) Cloudflare Turnstile (only enforced when the secret is configured).
+    if TURNSTILE_SECRET:
+        if not turnstile_token:
+            raise HTTPException(
+                status_code=403,
+                detail="Please complete the verification check and try again.")
+        if not await run_in_threadpool(_verify_turnstile, turnstile_token, client):
+            raise HTTPException(
+                status_code=403,
+                detail="Verification failed. Please complete the check again.")
 
     # 2) Validate tolerance: reject non-finite, clamp to a sane range. An
     #    unbounded value would otherwise mark everything "matched" or 500 the
@@ -242,8 +282,9 @@ async def reconcile_endpoint(
                    "a few seconds.")
     try:
         portal_parsed, purchase_parsed, result = await asyncio.wait_for(
-            run_in_threadpool(_reconcile_blocking, portal_bytes, purchase_bytes,
-                              tolerance),
+            anyio.to_thread.run_sync(_reconcile_blocking, portal_bytes,
+                                     purchase_bytes, tolerance,
+                                     limiter=_reconcile_limiter),
             timeout=RECONCILE_TIMEOUT,
         )
     except asyncio.TimeoutError:
