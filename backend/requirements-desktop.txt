@@ -1,0 +1,5 @@
+# Extra build-time dependency for the desktop (Electron) app only:
+#   pip install -r requirements.txt -r requirements-desktop.txt
+# PyInstaller freezes desktop_server.py into the `gst-backend` executable
+# that the Electron shell bundles. Not needed for the web deployment.
+pyinstaller>=6.16

@@ -128,9 +128,26 @@ gst/
 ├── frontend/
 │   ├── app/               # Next.js App Router (layout, page, styles, icon)
 │   ├── components/        # FileDrop, SummaryCards, ResultsTable
-│   └── lib/               # api client, types, formatting
+│   └── lib/               # api client, types, formatting, desktop bridge
+├── desktop/               # Electron shell + build scripts (see desktop/README.md)
 └── start.sh               # boots both servers
 ```
+
+## Desktop app (Windows / macOS / Linux)
+
+The same tool ships as a **self-contained desktop app**: one installer,
+nothing else to set up. It bundles this UI and a frozen copy of the Python
+backend (PyInstaller), starts the backend on a random local port, and shuts it
+down on quit. No internet connection is needed and no file leaves the machine.
+
+```bash
+cd desktop && npm install && npm run dist     # -> desktop/dist/
+```
+
+Installers are built per OS (the frozen backend can't be cross-compiled). For
+Windows builds from a Mac, run the **Desktop app** GitHub Actions workflow, or
+push a `v*` tag to get them attached to a GitHub Release. Details, dev loop and
+troubleshooting: [`desktop/README.md`](./desktop/README.md).
 
 ## Deploying
 

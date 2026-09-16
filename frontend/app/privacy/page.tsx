@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import SiteFooter from "@/components/SiteFooter";
 import { OWNER_NAME, SUPPORT_EMAIL, SUPPORT_HREF } from "@/lib/contact";
+import { IS_DESKTOP } from "@/lib/desktop";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — GST Purchase Matcher",
@@ -34,6 +35,16 @@ export default function PrivacyPage() {
             them.
           </strong>
         </p>
+
+        {IS_DESKTOP && (
+          <p className="lede">
+            <strong>You are using the desktop app.</strong> It runs entirely on
+            this computer: your files are read by a local process, nothing is
+            sent to any server, and no internet connection is needed. The
+            sections below describe the hosted web version; wherever they say
+            “the server”, read “the local process on your machine”.
+          </p>
+        )}
 
         <h2>Who operates this tool</h2>
         <p>

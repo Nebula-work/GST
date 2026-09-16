@@ -1,0 +1,107 @@
+name: Desktop app
+
+# Builds the self-contained desktop app (Electron shell + bundled UI + frozen
+# Python backend) for Windows, macOS and Linux, smoke-tests each packaged
+# build end to end, and uploads the installers as workflow artifacts.
+# On a version tag (v1.2.3) it also attaches them to a GitHub Release.
+#
+# The Python backend is frozen with PyInstaller, which cannot cross-compile,
+# so each OS builds its own installer. Builds are unsigned (Windows shows a
+# SmartScreen "More info -> Run anyway" prompt the first time).
+on:
+  workflow_dispatch: {}
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # release job attaches the installers to the tag's release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win
+            unpacked: dist/win-unpacked/GST Purchase Matcher.exe
+          - os: macos-latest
+            target: mac
+            unpacked: dist/mac-arm64/GST Purchase Matcher.app/Contents/MacOS/GST Purchase Matcher
+          - os: ubuntu-latest
+            target: linux
+            unpacked: dist/linux-unpacked/gst-purchase-matcher
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-desktop.txt
+
+      - name: Install backend runtime + build requirements
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-desktop.txt
+
+      - name: Install Node dependencies
+        run: |
+          npm ci --prefix frontend
+          npm ci --prefix desktop
+
+      - name: Build installers
+        working-directory: desktop
+        env:
+          GST_PYTHON: ${{ steps.py.outputs.python-path }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false" # no code-signing certificates configured
+        run: npm run dist:${{ matrix.target }} -- --publish never
+
+      - name: Smoke test the packaged app
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ "${{ matrix.target }}" = linux ]; then
+            sudo apt-get install -y -q xvfb
+            xvfb-run -a node scripts/smoke.mjs "${{ matrix.unpacked }}" --no-sandbox
+          else
+            node scripts/smoke.mjs "${{ matrix.unpacked }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gst-purchase-matcher-${{ matrix.target }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+            desktop/dist/*.zip
+            desktop/dist/*.AppImage
+            desktop/dist/*.deb
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Attach installers to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.ref_name }}"
+          gh release create "$tag" --repo "${{ github.repository }}" --title "$tag" --generate-notes artifacts/* \
+            || gh release upload "$tag" --repo "${{ github.repository }}" --clobber artifacts/*

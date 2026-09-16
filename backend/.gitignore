@@ -1,3 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
+
+# PyInstaller scratch (the frozen backend itself lands in desktop/backend-dist/)
+build/
+dist/

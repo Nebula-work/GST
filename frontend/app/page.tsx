@@ -1,14 +1,25 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import FileDrop from "@/components/FileDrop";
 import SummaryCards from "@/components/SummaryCards";
 import ResultsTable from "@/components/ResultsTable";
 import SiteFooter from "@/components/SiteFooter";
-import Turnstile, { TURNSTILE_ENABLED, type TurnstileHandle } from "@/components/Turnstile";
+import type { TurnstileHandle } from "@/components/Turnstile";
+import { TURNSTILE_ENABLED } from "@/lib/turnstile";
 import { reconcile, loadSample } from "@/lib/api";
 import type { ReconResult, ReconRow, TabKey, UnmatchedRow } from "@/lib/types";
 import { inr } from "@/lib/format";
+
+// The bot-check widget is web-only. Choosing it behind a build-time constant
+// (not the imported flag: webpack can only fold constants it can see here)
+// keeps the component and its Cloudflare script URL out of the desktop bundle
+// entirely; on the web it is fetched lazily on first render.
+const Turnstile =
+  process.env.NEXT_PUBLIC_DESKTOP === "1"
+    ? null
+    : dynamic(() => import("@/components/Turnstile"), { ssr: false });
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "mismatched", label: "Mismatches" },
@@ -213,7 +224,7 @@ export default function Home() {
           </button>
         </div>
 
-        {TURNSTILE_ENABLED && (
+        {TURNSTILE_ENABLED && Turnstile && (
           <div className="turnstile-row">
             <Turnstile ref={turnstileRef} onToken={setTurnstileToken} />
           </div>
