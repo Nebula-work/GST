@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "Reconcile your purchase register against GSTR-2A/2B, entirely on your own machine.",
   "author": "Niladri Adak <niladri.adak23@gmail.com>",
+  "homepage": "https://github.com/Nebula-work/GST",
   "license": "UNLICENSED",
   "private": true,
   "main": "main/main.js",
