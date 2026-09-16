@@ -1,0 +1,88 @@
+{
+  "name": "gst-purchase-matcher-desktop",
+  "productName": "GST Purchase Matcher",
+  "version": "1.0.0",
+  "description": "Reconcile your purchase register against GSTR-2A/2B, entirely on your own machine.",
+  "author": "Niladri Adak <niladri.adak23@gmail.com>",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main/main.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:frontend": "node scripts/build-frontend.mjs",
+    "build:backend": "node scripts/build-backend.mjs",
+    "build:all": "npm run build:frontend && npm run build:backend",
+    "start": "electron .",
+    "dev": "npm run build:frontend && electron .",
+    "smoke": "node scripts/smoke.mjs",
+    "pack": "npm run build:all && electron-builder --dir",
+    "dist": "npm run build:all && electron-builder",
+    "dist:mac": "npm run build:all && electron-builder --mac",
+    "dist:win": "npm run build:all && electron-builder --win",
+    "dist:linux": "npm run build:all && electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.niladriadak.gst-purchase-matcher",
+    "productName": "GST Purchase Matcher",
+    "copyright": "Copyright © 2026 Niladri Adak",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist/gst-backend",
+        "to": "backend"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "maintainer": "niladri.adak23@gmail.com",
+      "executableName": "gst-purchase-matcher"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}"
+    }
+  }
+}

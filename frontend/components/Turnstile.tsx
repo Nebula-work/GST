@@ -1,12 +1,10 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { TURNSTILE_ENABLED, TURNSTILE_SITE_KEY } from "@/lib/turnstile";
 
-// Public site key, baked at build time. When unset (local dev / no key), the
-// widget renders nothing and the app does not require a token — the backend
-// only enforces verification when ITS secret is configured.
-export const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "";
-export const TURNSTILE_ENABLED = TURNSTILE_SITE_KEY.length > 0;
+// Web-only. See lib/turnstile.ts for the site key / enabled flag; app/page.tsx
+// loads this component lazily so desktop builds never bundle it.
 
 const SCRIPT_ID = "cf-turnstile-script";
 const SCRIPT_SRC =

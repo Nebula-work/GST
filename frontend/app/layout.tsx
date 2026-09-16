@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from "next/font/google";
 import Script from "next/script";
+import { IS_DESKTOP } from "@/lib/desktop";
 import "./globals.css";
 
 const display = Fraunces({
@@ -39,12 +40,15 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${display.variable} ${sans.variable} ${mono.variable}`}>
         {children}
-        <Script
-          defer
-          src="https://static.cloudflareinsights.com/beacon.min.js"
-          data-cf-beacon='{"token": "e6ca49dcfe064cb7a88a41b4f571b813"}'
-          strategy="afterInteractive"
-        />
+        {/* Hosted-site analytics only: the desktop app makes no network calls. */}
+        {!IS_DESKTOP && (
+          <Script
+            defer
+            src="https://static.cloudflareinsights.com/beacon.min.js"
+            data-cf-beacon='{"token": "e6ca49dcfe064cb7a88a41b4f571b813"}'
+            strategy="afterInteractive"
+          />
+        )}
       </body>
     </html>
   );

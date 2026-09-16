@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SUPPORT_EMAIL, SUPPORT_HREF } from "@/lib/contact";
+import { IS_DESKTOP } from "@/lib/desktop";
 
 export default function SiteFooter() {
   return (
@@ -7,7 +8,10 @@ export default function SiteFooter() {
       <div className="foot-left">
         <div className="foot-brand">GST Purchase Matcher</div>
         <div className="foot-sub">
-          Uploaded files are processed in memory and never stored. GSTR-2A / 2B reconciliation. ·{" "}
+          {IS_DESKTOP
+            ? "Files are read on this computer and never leave it."
+            : "Uploaded files are processed in memory and never stored."}{" "}
+          GSTR-2A / 2B reconciliation. ·{" "}
           <Link href="/privacy" className="foot-link">
             Privacy
           </Link>
