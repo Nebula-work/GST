@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { SUPPORT_EMAIL, SUPPORT_HREF } from "@/lib/contact";
 import { IS_DESKTOP } from "@/lib/desktop";
+import DesktopVersion from "./DesktopVersion";
 
 export default function SiteFooter() {
   return (
@@ -15,6 +16,7 @@ export default function SiteFooter() {
           <Link href="/privacy" className="foot-link">
             Privacy
           </Link>
+          {IS_DESKTOP && <DesktopVersion />}
         </div>
       </div>
       <div className="foot-right">

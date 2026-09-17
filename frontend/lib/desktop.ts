@@ -17,6 +17,33 @@ export interface GstDesktopBridge {
   version: string;
   /** Node's process.platform of the host: "darwin" | "win32" | "linux". */
   platform: string;
+  /** Update check against GitHub Releases (desktop/main/updates.js). */
+  updates?: GstDesktopUpdates;
+}
+
+export interface UpdateState {
+  state: "idle" | "checking" | "latest" | "available" | "downloading" | "downloaded" | "error";
+  currentVersion: string;
+  /** The newer version, once one is known. */
+  version?: string;
+  /** GitHub release page. */
+  notesUrl?: string;
+  /** Installer for this platform; null when the release has none. */
+  assetUrl?: string | null;
+  assetName?: string | null;
+  received?: number;
+  total?: number;
+  /** Local path of the downloaded installer. */
+  file?: string;
+  error?: string;
+}
+
+export interface GstDesktopUpdates {
+  state(): Promise<UpdateState>;
+  check(): Promise<UpdateState>;
+  download(): Promise<UpdateState>;
+  install(): Promise<UpdateState>;
+  onChange(callback: (next: UpdateState) => void): () => void;
 }
 
 declare global {
