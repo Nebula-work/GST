@@ -12,13 +12,13 @@
  * The renderer is sandboxed with no Node access; the only thing it learns from
  * the shell is the backend URL and the app version.
  */
-const { app, BrowserWindow, dialog, Menu, net, protocol, shell } = require("electron");
+const { app, BrowserWindow, dialog, net, protocol, shell } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
 const backend = require("./backend");
-const { buildMenu } = require("./menu");
+const { installMenu } = require("./menu");
 const pkg = require("../package.json");
 
 const APP_SCHEME = "app";
@@ -26,7 +26,6 @@ const APP_HOST = "gst";
 const APP_ORIGIN = `${APP_SCHEME}://${APP_HOST}`;
 const RENDERER_DIR = path.join(__dirname, "..", "renderer");
 const LOADING_PAGE = path.join(__dirname, "loading.html");
-const SUPPORT_EMAIL = (/<([^>]+)>/.exec(pkg.author || "") || [])[1] || "";
 const AUTHOR_NAME = String(pkg.author || "").replace(/\s*<[^>]*>/, "").trim();
 const COPYRIGHT = `Copyright © ${new Date().getFullYear()} ${AUTHOR_NAME}`;
 
@@ -142,6 +141,12 @@ function createWindow() {
       openExternally(url);
     }
   });
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type === "keyDown" && input.key === "F12") {
+      win.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
   });
@@ -224,9 +229,7 @@ if (!app.requestSingleInstanceLock()) {
       credits: "Reconciles GSTR-2A/2B against your purchase register, entirely on this computer.",
     });
     protocol.handle(APP_SCHEME, serveRenderer);
-    Menu.setApplicationMenu(
-      buildMenu({ logDir: app.getPath("logs"), supportUrl: `mailto:${SUPPORT_EMAIL}` }),
-    );
+    installMenu();
 
     const port = await backend.pickFreePort();
     apiBase = `http://127.0.0.1:${port}`;

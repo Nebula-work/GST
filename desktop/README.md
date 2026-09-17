@@ -79,9 +79,9 @@ the same against a packaged build; CI runs it on every installer.
 
 ## Troubleshooting
 
-- **"could not start" dialog** — the backend log is at the path shown
-  (*Help → Open Log Folder*): `~/Library/Logs/GST Purchase Matcher/` on macOS,
-  `%APPDATA%\GST Purchase Matcher\logs\` on Windows.
+- **"could not start" dialog** — the backend log is at the path shown:
+  `%APPDATA%\GST Purchase Matcher\logs\` on Windows,
+  `~/Library/Logs/GST Purchase Matcher/` on macOS. Press **F12** for DevTools.
 - **Windows Defender flags the app** — PyInstaller binaries are a common
   false positive. The one-folder build used here trips it far less than
   one-file builds; code signing removes it entirely.
