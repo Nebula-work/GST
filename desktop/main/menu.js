@@ -1,36 +1,27 @@
 "use strict";
-const { Menu, shell } = require("electron");
+/**
+ * Application menu.
+ *
+ * Windows / Linux: none. The menu bar lives inside the window and nothing in
+ * it is needed for this single-screen app, so it is removed entirely
+ * (Menu.setApplicationMenu(null)). Clipboard shortcuts in text fields and
+ * Alt+F4 are handled by Chromium / the OS without a menu.
+ *
+ * macOS: the menu bar is the system's, and Cmd+C / Cmd+V / Cmd+Q only work
+ * through menu roles, so keep the smallest menu that makes those work.
+ */
+const { Menu } = require("electron");
 
-function buildMenu({ logDir, supportUrl }) {
-  const isMac = process.platform === "darwin";
-  const template = [
-    ...(isMac ? [{ role: "appMenu" }] : []),
-    { label: "File", submenu: [isMac ? { role: "close" } : { role: "quit" }] },
+function buildMacMenu() {
+  return Menu.buildFromTemplate([
+    { role: "appMenu" },
     { role: "editMenu" },
-    {
-      label: "View",
-      submenu: [
-        { role: "reload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
-    },
     { role: "windowMenu" },
-    {
-      role: "help",
-      submenu: [
-        { label: "Open Log Folder", click: () => shell.openPath(logDir) },
-        { label: "Contact Support…", click: () => shell.openExternal(supportUrl) },
-        ...(isMac ? [] : [{ type: "separator" }, { role: "about" }]),
-      ],
-    },
-  ];
-  return Menu.buildFromTemplate(template);
+  ]);
 }
 
-module.exports = { buildMenu };
+function installMenu() {
+  Menu.setApplicationMenu(process.platform === "darwin" ? buildMacMenu() : null);
+}
+
+module.exports = { installMenu };
