@@ -39,10 +39,13 @@ export default function PrivacyPage() {
         {IS_DESKTOP && (
           <p className="lede">
             <strong>You are using the desktop app.</strong> It runs entirely on
-            this computer: your files are read by a local process, nothing is
-            sent to any server, and no internet connection is needed. The
-            sections below describe the hosted web version; wherever they say
-            “the server”, read “the local process on your machine”.
+            this computer: your files are read by a local process and nothing
+            about them is sent anywhere. Its only network request is a check
+            for a newer version on GitHub when it starts (and every few hours),
+            which carries no information about you or your files; without
+            internet the check is simply skipped. The sections below describe
+            the hosted web version; wherever they say “the server”, read “the
+            local process on your machine”.
           </p>
         )}
 

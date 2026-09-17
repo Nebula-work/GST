@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Fraunces, Hanken_Grotesk, IBM_Plex_Mono } from "next/font/google";
 import Script from "next/script";
 import { IS_DESKTOP } from "@/lib/desktop";
+import UpdateBanner from "@/components/UpdateBanner";
 import "./globals.css";
 
 const display = Fraunces({
@@ -39,6 +40,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${display.variable} ${sans.variable} ${mono.variable}`}>
+        {IS_DESKTOP && <UpdateBanner />}
         {children}
         {/* Hosted-site analytics only: the desktop app makes no network calls. */}
         {!IS_DESKTOP && (

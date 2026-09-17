@@ -19,6 +19,7 @@ const { pathToFileURL } = require("node:url");
 
 const backend = require("./backend");
 const { installMenu } = require("./menu");
+const updates = require("./updates");
 const pkg = require("../package.json");
 
 const APP_SCHEME = "app";
@@ -190,10 +191,29 @@ async function runSmokeTest(win) {
           summary: report.summary,
           turnstileRendered: !!document.querySelector(".turnstile"),
           externalScripts: [...document.scripts].map((s) => s.src).filter((s) => /^https?:/.test(s)),
+          footerVersion: document.querySelector(".foot-sub")?.textContent.match(/v\\d[\\w.-]*/)?.[0] ?? null,
+          updateControl: document.querySelector(".foot-btn")?.textContent ?? null,
         };
       })()`,
       true,
     );
+    if (process.env.GST_UPDATE_FAKE_VERSION) {
+      result.update = await win.webContents.executeJavaScript(
+        `(async () => {
+          const u = window.gstDesktop.updates;
+          const wait = async (pred, ms) => { for (let i = 0; i < ms / 100; i++) { const s = await u.state(); if (pred(s)) return s; await new Promise((r) => setTimeout(r, 100)); } throw new Error("timed out waiting for update state: " + JSON.stringify(await u.state())); };
+          let s = await u.check();
+          if (s.state !== "available") throw new Error("expected an available update, got " + JSON.stringify(s));
+          await wait(() => !!document.querySelector(".update-banner"), 3000);
+          await u.download();
+          s = await wait((x) => x.state === "downloaded" || x.state === "error" || (x.state === "available" && x.error), 60000);
+          if (s.state !== "downloaded") throw new Error("download did not complete: " + JSON.stringify(s));
+          await wait(() => /downloaded/i.test(document.querySelector(".update-banner")?.textContent || ""), 3000);
+          return { version: s.version, file: s.file, bytes: s.received ?? null };
+        })()`,
+        true,
+      );
+    }
     await new Promise((r) => setTimeout(r, 1200)); // let fonts settle for the screenshot
     const shot = path.join(process.env.GST_SMOKE_TEST_DIR || app.getPath("temp"), "gst-smoke.png");
     fs.writeFileSync(shot, (await win.webContents.capturePage()).toPNG());
@@ -230,6 +250,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     protocol.handle(APP_SCHEME, serveRenderer);
     installMenu();
+    updates.init({ homepage: pkg.homepage, window: () => mainWindow });
 
     const port = await backend.pickFreePort();
     apiBase = `http://127.0.0.1:${port}`;

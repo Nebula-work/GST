@@ -3,8 +3,9 @@
 A self-contained desktop version of the reconciliation tool. Users install
 nothing else: the app bundles the web UI and a frozen copy of the Python
 backend, runs the backend on a random `127.0.0.1` port when it starts, and
-stops it when it quits. Files never leave the machine and no internet
-connection is needed.
+stops it when it quits. Files never leave the machine. The only network
+request is a check for a newer GitHub Release (see *Updates* below); offline
+it is skipped.
 
 ```
 ┌─ Electron shell (main/) ──────────────────────────────────────────────┐
@@ -76,6 +77,28 @@ the same against a packaged build; CI runs it on every installer.
   origin (absolute `/_next/…` paths and `/privacy` routing work as on a web
   host), adds a CSP, sandboxes the renderer, and opens `mailto:`/`https:`
   links in the system browser. `main/backend.js` owns the child process.
+
+## Updates
+
+There is no auto-updater (builds are unsigned). Instead, on launch and every
+six hours, `main/updates.js` asks `api.github.com` for the repo's latest
+release (repo taken from `homepage` in package.json). If its tag is newer
+than the running version, a banner appears at the top of the window:
+**Download update** fetches the matching asset into the user's Downloads
+folder with a progress bar (Windows: `…-Setup.exe`, or `…-Portable.exe` when
+running the portable build; macOS: the `.dmg` for the CPU; Linux: `.AppImage`
+or `.deb`), then **Install now** launches the installer and quits the app on
+Windows, or reveals the file on other platforms. The footer shows the version
+and a manual **Check for updates**.
+
+To release an update: bump `version` in `desktop/package.json`, merge, and
+publish a GitHub Release tagged `v<version>`; the workflow attaches the
+installers and every running copy will offer it on its next check.
+
+Dev knobs (ignored in packaged builds): `GST_UPDATE_FAKE_VERSION=0.9.0`
+makes the app believe it is older than the latest release, and
+`GST_UPDATE_FAKE_ASSET=<url>` substitutes the download URL, so
+`npm run smoke` can drive the whole banner → download → downloaded flow.
 
 ## Troubleshooting
 

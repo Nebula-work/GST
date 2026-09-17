@@ -138,7 +138,8 @@ gst/
 The same tool ships as a **self-contained desktop app**: one installer,
 nothing else to set up. It bundles this UI and a frozen copy of the Python
 backend (PyInstaller), starts the backend on a random local port, and shuts it
-down on quit. No internet connection is needed and no file leaves the machine.
+down on quit. No file leaves the machine; the app's only network request is a
+check for a newer GitHub Release, which it offers to download and install.
 
 ```bash
 cd desktop && npm install && npm run dist     # -> desktop/dist/
